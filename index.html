@@ -4,98 +4,248 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <meta name="theme-color" content="#0A1628">
-<link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Impact Athletic">
+<link rel="manifest" href="/manifest.json">
 <title>Impact Athletic</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<style>
-:root{
-  --bg:#0A1628;--bg2:#111E33;--bg3:#172340;--card:#1A2844;
-  --border:#2A3A5A;--blue:#378ADD;--blue2:#185FA5;
-  --green:#1D9E75;--amber:#EF9F27;--red:#D85A30;--purple:#7F77DD;
-  --text:#E8EDF5;--text2:#8A9BBF;--text3:#5A6A8A;
-  --ok:#3B6D11;--ok-bg:#1A2E0A;--low:#BA7517;--low-bg:#2E2006;--high:#C0392B;--high-bg:#2E0A0A;
-  --radius:14px;--radius-sm:10px;--nav-h:68px;
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, push, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+// ⬇️ PASTE YOUR FIREBASE CONFIG HERE
+const firebaseConfig = {
+  apiKey: "AIzaSyBfUkXr97F4RkB5qXIH827lK7gBFyCDpIM",
+  authDomain: "impact-athletic.firebaseapp.com",
+  databaseURL: "https://impact-athletic-default-rtdb.firebaseio.com",
+  projectId: "impact-athletic",
+  appId: "1:931037608281:web:29f70c36ef336a1a433448"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const today = new Date().toISOString().split('T')[0];
+const now = new Date().toTimeString().slice(0,5);
+['p-date','ht-date'].forEach(id=>document.getElementById(id).value=today);
+['p-time','ht-time'].forEach(id=>document.getElementById(id).value=now);
+
+let appData = {pool:[], hottub:[]};
+let pChart=null, htChart=null;
+let historyFilter='all';
+
+// --- Firebase listeners ---
+function syncStatus(dotId, msgId, msg, state='ok'){
+  const dot=document.getElementById(dotId);
+  const msgEl=document.getElementById(msgId);
+  if(!dot||!msgEl) return;
+  dot.className='sync-dot'+(state==='syncing'?' syncing':state==='error'?' error':'');
+  msgEl.textContent=msg;
 }
+
+onValue(ref(db,'pool'), snap=>{
+  appData.pool=[];
+  if(snap.exists()) snap.forEach(c=>appData.pool.unshift({...c.val(),_key:c.key}));
+  renderHistory(); renderCharts();
+});
+onValue(ref(db,'hottub'), snap=>{
+  appData.hottub=[];
+  if(snap.exists()) snap.forEach(c=>appData.hottub.unshift({...c.val(),_key:c.key}));
+  renderHistory(); renderCharts();
+});
+
+// --- Save entry ---
+window.saveEntry = async function(type){
+  const isPool=type==='pool';
+  const dateId=isPool?'p-date':'ht-date';
+  if(!document.getElementById(dateId).value){alert('Please select a date.');return;}
+  const dotId=isPool?'sync-dot-p':'sync-dot-ht';
+  const msgId=isPool?'sync-msg-p':'sync-msg-ht';
+  syncStatus(dotId,msgId,'Saving...','syncing');
+  const entry={date:v(dateId),time:v(isPool?'p-time':'ht-time'),orp:v(isPool?'p-orp':'ht-orp'),tech:v(isPool?'p-tech':'ht-tech'),ts:Date.now()};
+  if(isPool){
+    entry.fc=n('p-fc');entry.cc=n('p-cc');entry.ph=n('p-ph');
+    entry.ta=n('p-ta');entry.ca=n('p-ca');entry.cya=n('p-cya');
+    entry.psi1=n('p-psi1');entry.psi2=n('p-psi2');entry.temp=n('p-temp');
+    entry.clarity=v('p-clarity');entry.notes=v('p-notes');
+  } else {
+    entry.sanType=v('ht-type');entry.san=n('ht-san');entry.cc=n('ht-cc');
+    entry.ph=n('ht-ph');entry.ta=n('ht-ta');entry.ca=n('ht-ca');
+    entry.psi=n('ht-psi');entry.temp=n('ht-temp');
+    entry.foam=v('ht-foam');entry.cover=v('ht-cover');entry.notes=v('ht-notes');
+  }
+  try{
+    await push(ref(db,type),entry);
+    syncStatus(dotId,msgId,'Synced ✓','ok');
+    clearForm(type);
+  } catch(e){
+    syncStatus(dotId,msgId,'Sync failed — check connection','error');
+  }
+}
+
+function v(id){return document.getElementById(id)?.value||null;}
+function n(id){const val=parseFloat(document.getElementById(id)?.value);return isNaN(val)?null:val;}
+
+window.clearForm=function(type){
+  const isPool=type==='pool';
+  const ids=isPool?['p-fc','p-cc','p-ph','p-ta','p-ca','p-cya','p-psi1','p-psi2','p-temp','p-clarity','p-notes','p-orp','p-tech']:
+    ['ht-type','ht-san','ht-cc','ht-ph','ht-ta','ht-ca','ht-psi','ht-temp','ht-foam','ht-cover','ht-notes','ht-orp','ht-tech'];
+  ids.forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById(isPool?'p-date':'ht-date').value=today;
+  document.getElementById(isPool?'p-time':'ht-time').value=now;
+}
+
+window.setEntryType=function(type,el){
+  document.querySelectorAll('.seg-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('form-pool').style.display=type==='pool'?'block':'none';
+  document.getElementById('form-hottub').style.display=type==='hottub'?'block':'none';
+}
+
+window.switchPanel=function(name,el){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  el.classList.add('active');
+  if(name==='charts')renderCharts();
+  if(name==='history')renderHistory();
+  if(name==='ref')renderRef();
+}
+
+window.setHistoryFilter=function(f,el){
+  historyFilter=f;
+  document.querySelectorAll('.tag-row .tag').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  renderHistory();
+}
+
+function stat(v,min,max){if(v===null||v===undefined)return null;if(v<min)return'low';if(v>max)return'high';return'ok';}
+function badge(v,min,max){
+  if(v===null||v===undefined)return'<span style="color:var(--text3)">—</span>';
+  const s=stat(v,min,max);
+  return`<span class="badge badge-${s}">${v}</span>`;
+}
+
+function renderHistory(){
+  const el=document.getElementById('history-list');
+  if(!el)return;
+  let entries=[];
+  if(historyFilter!=='hottub') appData.pool.forEach(e=>entries.push({...e,_type:'pool'}));
+  if(historyFilter!=='pool') appData.hottub.forEach(e=>entries.push({...e,_type:'hottub'}));
+  entries.sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+  if(!entries.length){el.innerHTML='<div class="empty">No entries yet.<br>Add your first reading in Entry.</div>';return;}
+  el.innerHTML=entries.slice(0,40).map(e=>{
+    const isPool=e._type==='pool';
+    const typeLabel=isPool?'🏊 Pool':'♨️ Hot Tub';
+    const chips=[];
+    if(isPool){
+      if(e.fc!=null)chips.push(`<div class="chip"><strong>Cl</strong> ${badge(e.fc,1,3)}</div>`);
+      if(e.ph!=null)chips.push(`<div class="chip"><strong>pH</strong> ${badge(e.ph,7.2,7.6)}</div>`);
+      if(e.ta!=null)chips.push(`<div class="chip"><strong>Alk</strong> ${e.ta}ppm</div>`);
+      if(e.psi1!=null)chips.push(`<div class="chip"><strong>F1</strong> ${e.psi1}psi</div>`);
+      if(e.psi2!=null)chips.push(`<div class="chip"><strong>F2</strong> ${e.psi2}psi</div>`);
+      if(e.temp!=null)chips.push(`<div class="chip"><strong>Temp</strong> ${e.temp}°F</div>`);
+      if(e.clarity)chips.push(`<div class="chip">${e.clarity}</div>`);
+    } else {
+      if(e.san!=null)chips.push(`<div class="chip"><strong>${e.sanType||'San'}</strong> ${badge(e.san,3,5)}</div>`);
+      if(e.ph!=null)chips.push(`<div class="chip"><strong>pH</strong> ${badge(e.ph,7.2,7.8)}</div>`);
+      if(e.ta!=null)chips.push(`<div class="chip"><strong>Alk</strong> ${e.ta}ppm</div>`);
+      if(e.psi!=null)chips.push(`<div class="chip"><strong>PSI</strong> ${e.psi}</div>`);
+      if(e.temp!=null)chips.push(`<div class="chip"><strong>Temp</strong> ${e.temp}°F</div>`);
+      if(e.foam)chips.push(`<div class="chip">Foam: ${e.foam}</div>`);
+    }
+    if(e.orp)chips.push(`<div class="chip"><strong>ORP</strong> ${e.orp}mV</div>`);
+    return`<div class="log-entry">
+      <div class="log-entry-header">
+        <div>
+          <div class="log-date">${e.date} <span style="color:var(--text2);font-weight:400;font-size:13px">${e.time||''}</span></div>
+          <div style="font-size:12px;color:var(--blue);margin-top:2px">${typeLabel}${e.tech?' · '+e.tech:''}</div>
+        </div>
+      </div>
+      <div class="log-chips">${chips.join('')}</div>
+      ${e.notes?`<div class="log-notes">${e.notes}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function renderCharts(){
+  const pd=[...appData.pool].reverse();
+  const hd=[...appData.hottub].reverse();
+  const pCanvas=document.getElementById('pool-chart');
+  const hCanvas=document.getElementById('ht-chart');
+  if(!pCanvas||!hCanvas)return;
+  if(pChart)pChart.destroy();
+  if(htChart)htChart.destroy();
+  const cfg=(labels,datasets)=>({type:'line',data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false}},scales:{x:{ticks:{color:'#5A6A8A',maxTicksLimit:7,font:{size:11}},grid:{color:'#1A2844'}},y:{ticks:{color:'#5A6A8A',font:{size:11}},grid:{color:'#1A2844'},beginAtZero:false}}}});
+  const ds=(label,data,color,dash=[])=>({label,data,borderColor:color,backgroundColor:color+'22',tension:0.3,pointRadius:3,fill:false,borderDash:dash,borderWidth:2});
+  pChart=new Chart(pCanvas,cfg(pd.length?pd.map(e=>e.date):['—'],[ds('Free Cl',pd.map(e=>e.fc),'#378ADD'),ds('pH',pd.map(e=>e.ph),'#1D9E75',[5,3]),ds('Alk÷10',pd.map(e=>e.ta!=null?+(e.ta/10).toFixed(1):null),'#EF9F27',[2,4]),ds('F1 PSI',pd.map(e=>e.psi1),'#D85A30',[8,3]),ds('F2 PSI',pd.map(e=>e.psi2),'#7F77DD',[4,2])]));
+  htChart=new Chart(hCanvas,cfg(hd.length?hd.map(e=>e.date):['—'],[ds('Sanitizer',hd.map(e=>e.san),'#378ADD'),ds('pH',hd.map(e=>e.ph),'#1D9E75',[5,3]),ds('Alk÷10',hd.map(e=>e.ta!=null?+(e.ta/10).toFixed(1):null),'#EF9F27',[2,4]),ds('PSI',hd.map(e=>e.psi),'#D85A30',[8,3])]));
+}
+
+function renderRef(){
+  const rows=[['Free Chlorine','1.0–3.0 ppm','3.0–5.0 ppm'],['Bromine','N/A','3.0–5.0 ppm'],['Combined Cl','< 0.5 ppm','< 0.5 ppm'],['pH','7.2–7.6','7.2–7.8'],['Total Alkalinity','80–120 ppm','80–120 ppm'],['Calcium Hardness','200–400 ppm','150–250 ppm'],['Cyanuric Acid','30–50 ppm','N/A'],['ORP','650–750 mV','650–750 mV'],['Water Temp','78–82 °F','100–104 °F'],['Filter Pressure','Note baseline','Note baseline']];
+  const refTable=document.getElementById('ref-table');
+  if(refTable)refTable.innerHTML=`<div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;font-weight:700;color:var(--text3)">PARAMETER</span><span style="font-size:12px;font-weight:700;color:var(--text3)">POOL / HOT TUB</span></div>`+rows.map(([p,pool,ht])=>`<div class="ref-row"><span class="ref-param">${p}</span><div class="ref-vals"><div>Pool: ${pool}</div><div>Tub: ${ht}</div></div></div>`).join('');
+  const tips=[['Chlorine dropping fast?','CYA may be below 30 ppm — chlorine burns off in sunlight. Add stabilizer and retest.'],['pH keeps rising?','High aeration off-gasses CO₂ and drives pH up. Reduce jets or add pH reducer in small doses.'],['Cloudy water?','Usually high pH, low chlorine, or high calcium. Test all three, shock, and run filter 24 hrs.'],['Filter +8 PSI over baseline?','Backwash (sand/DE) or clean/replace cartridge. A dirty filter stresses the pump.'],['Hot tub foaming?','Low calcium hardness, body oils, or soap residue. Shock, check calcium, encourage pre-soak shower.'],['Green pool?','Algae bloom. Brush walls, shock to 10× chlorine, run filter non-stop, retest in 24 hrs.'],['Low ORP reading?','ORP below 650 mV may indicate insufficient sanitizer or high organic load. Shock and retest.']];
+  const refTips=document.getElementById('ref-tips');
+  if(refTips)refTips.innerHTML=tips.map(([t,b])=>`<div class="tip-card"><div class="tip-title">${t}</div><div class="tip-body">${b}</div></div>`).join('');
+}
+
+renderRef();
+</script>
+<style>
+:root{--bg:#0A1628;--bg2:#111E33;--bg3:#172340;--card:#1A2844;--border:#2A3A5A;--blue:#378ADD;--green:#1D9E75;--amber:#EF9F27;--red:#D85A30;--purple:#7F77DD;--text:#E8EDF5;--text2:#8A9BBF;--text3:#5A6A8A;--ok-bg:#1A2E0A;--low-bg:#2E2006;--high-bg:#2E0A0A;--radius:14px;--radius-sm:10px;--nav-h:68px}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
 .app{max-width:480px;margin:0 auto;min-height:100vh;position:relative}
-
-/* Header */
 .header{background:var(--bg2);padding:52px 20px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
 .header h1{font-size:22px;font-weight:700;letter-spacing:-0.3px}
 .header h2{font-size:13px;color:var(--text2);font-weight:400;margin-top:2px}
-
-/* Nav */
 .nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:var(--bg2);border-top:1px solid var(--border);display:flex;z-index:200;padding-bottom:env(safe-area-inset-bottom)}
 .nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;border:none;background:none;color:var(--text3);font-size:10px;font-weight:500;cursor:pointer;transition:color .2s}
 .nav-btn.active{color:var(--blue)}
 .nav-btn svg{width:22px;height:22px}
-
-/* Scroll container */
 .scroll{padding:16px 16px calc(var(--nav-h) + 20px);overflow-y:auto;min-height:calc(100vh - 90px)}
-
-/* Panels */
 .panel{display:none}.panel.active{display:block}
-
-/* Cards */
 .card{background:var(--card);border-radius:var(--radius);padding:16px;margin-bottom:12px;border:1px solid var(--border)}
 .card-title{font-size:13px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px}
-
-/* Segment control */
 .segment{display:flex;background:var(--bg3);border-radius:var(--radius-sm);padding:3px;margin-bottom:16px}
 .seg-btn{flex:1;padding:8px;text-align:center;font-size:14px;font-weight:500;border-radius:8px;border:none;background:none;color:var(--text2);cursor:pointer;transition:all .2s}
 .seg-btn.active{background:var(--blue);color:#fff}
-
-/* Date row */
 .date-row{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .date-row label{font-size:12px;color:var(--text2);display:block;margin-bottom:4px}
-.date-field{flex:1;min-width:120px}
+.date-field{flex:1;min-width:110px}
 .date-field input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;color:var(--text);font-size:14px;-webkit-appearance:none}
-.orp-field{width:110px}
-
-/* Form grid */
+.orp-field{width:100px}
+.orp-field input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;color:var(--text);font-size:14px}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .form-group label{font-size:12px;color:var(--text2);display:block;margin-bottom:5px}
 .form-group input,.form-group select{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:11px 12px;color:var(--text);font-size:15px;-webkit-appearance:none}
 .form-group select option{background:var(--bg3)}
 .form-group.full{grid-column:span 2}
 .form-group textarea{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:11px 12px;color:var(--text);font-size:15px;resize:none;min-height:70px}
-
-/* Buttons */
 .btn-row{display:flex;gap:10px;margin-bottom:4px}
 .btn{flex:1;padding:14px;border-radius:var(--radius-sm);border:none;font-size:15px;font-weight:600;cursor:pointer;transition:opacity .2s}
 .btn:active{opacity:.8}
 .btn-primary{background:var(--blue);color:#fff}
 .btn-ghost{background:var(--bg3);color:var(--text2);border:1px solid var(--border)}
-
-/* Status badges */
 .badge{display:inline-block;font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px}
 .badge-ok{background:var(--ok-bg);color:#6AC832}
 .badge-low{background:var(--low-bg);color:#F0A030}
 .badge-high{background:var(--high-bg);color:#E05040}
-
-/* Log entries */
 .log-entry{background:var(--card);border-radius:var(--radius);padding:14px;margin-bottom:10px;border:1px solid var(--border)}
 .log-entry-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .log-date{font-size:15px;font-weight:600}
-.log-time{font-size:13px;color:var(--text2)}
 .log-chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{font-size:12px;padding:4px 10px;border-radius:20px;background:var(--bg3);color:var(--text2)}
 .chip strong{color:var(--text)}
 .log-notes{font-size:13px;color:var(--text2);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
-
-/* Charts */
 .chart-wrap{background:var(--card);border-radius:var(--radius);padding:16px;margin-bottom:12px;border:1px solid var(--border)}
-.chart-label{font-size:13px;font-weight:600;color:var(--text2);margin-bottom:12px}
 .chart-canvas{width:100%!important;height:200px!important}
 .legend{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px}
 .legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2)}
 .legend-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0}
-
-/* Reference */
 .ref-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}
 .ref-row:last-child{border-bottom:none}
 .ref-param{font-size:14px;font-weight:500}
@@ -103,14 +253,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;ba
 .tip-card{background:var(--card);border-radius:var(--radius);padding:14px;margin-bottom:10px;border-left:3px solid var(--blue)}
 .tip-title{font-size:14px;font-weight:600;margin-bottom:5px}
 .tip-body{font-size:13px;color:var(--text2);line-height:1.5}
-
-/* Sync indicator */
 .sync-bar{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text3);padding:8px 0 0}
 .sync-dot{width:7px;height:7px;border-radius:50%;background:var(--green)}
 .sync-dot.syncing{background:var(--amber);animation:pulse 1s infinite}
 .sync-dot.error{background:var(--red)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-
 .empty{text-align:center;padding:40px 20px;color:var(--text3);font-size:14px}
 .section-head{font-size:16px;font-weight:700;margin:20px 0 12px}
 .tag-row{display:flex;gap:8px;margin-bottom:16px}
@@ -124,29 +271,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;ba
     <h1>Impact Athletic</h1>
     <h2>Pool & Hot Tub Log</h2>
   </div>
-
   <div class="scroll">
-    <!-- ENTRY PANEL -->
+    <!-- ENTRY -->
     <div id="panel-entry" class="panel active">
       <div class="segment" style="margin-top:4px">
         <button class="seg-btn active" onclick="setEntryType('pool',this)">🏊 Pool</button>
         <button class="seg-btn" onclick="setEntryType('hottub',this)">♨️ Hot Tub</button>
       </div>
-
-      <!-- POOL FORM -->
       <div id="form-pool">
         <div class="card">
           <div class="card-title">Entry Info</div>
           <div class="date-row">
             <div class="date-field"><label>Date</label><input type="date" id="p-date"></div>
             <div class="date-field"><label>Time</label><input type="time" id="p-time"></div>
-            <div class="orp-field"><label>ORP</label><input type="text" id="p-orp" placeholder="mV" style="width:100%"></div>
+            <div class="orp-field"><label>ORP (mV)</label><input type="text" id="p-orp" placeholder="650–750"></div>
           </div>
           <div class="form-grid">
             <div class="form-group"><label>Technician</label><input type="text" id="p-tech" placeholder="Initials" maxlength="5"></div>
-            <div class="form-group"><label>Clarity</label>
-              <select id="p-clarity"><option value="">Select</option><option>Clear</option><option>Slightly cloudy</option><option>Cloudy</option><option>Green</option></select>
-            </div>
+            <div class="form-group"><label>Clarity</label><select id="p-clarity"><option value="">Select</option><option>Clear</option><option>Slightly cloudy</option><option>Cloudy</option><option>Green</option></select></div>
           </div>
         </div>
         <div class="card">
@@ -168,39 +310,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;ba
             <div class="form-group full"><label>Water Temp (°F)</label><input type="number" id="p-temp" step="0.5" placeholder="78–82" inputmode="decimal"></div>
           </div>
         </div>
-        <div class="card">
-          <div class="card-title">Notes</div>
-          <div class="form-group"><textarea id="p-notes" placeholder="Chemicals added, observations, actions taken..."></textarea></div>
-        </div>
+        <div class="card"><div class="card-title">Notes</div><div class="form-group"><textarea id="p-notes" placeholder="Chemicals added, observations..."></textarea></div></div>
         <div class="btn-row">
           <button class="btn btn-ghost" onclick="clearForm('pool')">Clear</button>
           <button class="btn btn-primary" onclick="saveEntry('pool')">Save Entry</button>
         </div>
-        <div class="sync-bar"><div class="sync-dot" id="sync-dot-p"></div><span id="sync-msg-p">Ready</span></div>
+        <div class="sync-bar"><div class="sync-dot" id="sync-dot-p"></div><span id="sync-msg-p">Connected</span></div>
       </div>
-
-      <!-- HOT TUB FORM -->
       <div id="form-hottub" style="display:none">
         <div class="card">
           <div class="card-title">Entry Info</div>
           <div class="date-row">
             <div class="date-field"><label>Date</label><input type="date" id="ht-date"></div>
             <div class="date-field"><label>Time</label><input type="time" id="ht-time"></div>
-            <div class="orp-field"><label>ORP</label><input type="text" id="ht-orp" placeholder="mV" style="width:100%"></div>
+            <div class="orp-field"><label>ORP (mV)</label><input type="text" id="ht-orp" placeholder="650–750"></div>
           </div>
           <div class="form-grid">
             <div class="form-group"><label>Technician</label><input type="text" id="ht-tech" placeholder="Initials" maxlength="5"></div>
-            <div class="form-group"><label>Foam</label>
-              <select id="ht-foam"><option value="">Select</option><option>No</option><option>Slight</option><option>Yes</option></select>
-            </div>
+            <div class="form-group"><label>Foam</label><select id="ht-foam"><option value="">Select</option><option>No</option><option>Slight</option><option>Yes</option></select></div>
           </div>
         </div>
         <div class="card">
           <div class="card-title">Chemical Readings</div>
           <div class="form-grid">
-            <div class="form-group"><label>Sanitizer Type</label>
-              <select id="ht-type"><option value="">Select</option><option>Chlorine</option><option>Bromine</option></select>
-            </div>
+            <div class="form-group"><label>Sanitizer Type</label><select id="ht-type"><option value="">Select</option><option>Chlorine</option><option>Bromine</option></select></div>
             <div class="form-group"><label>Sanitizer (ppm)</label><input type="number" id="ht-san" step="0.1" placeholder="3.0–5.0" inputmode="decimal"></div>
             <div class="form-group"><label>Combined Cl (ppm)</label><input type="number" id="ht-cc" step="0.1" placeholder="< 0.5" inputmode="decimal"></div>
             <div class="form-group"><label>pH</label><input type="number" id="ht-ph" step="0.1" placeholder="7.2–7.8" inputmode="decimal"></div>
@@ -213,30 +346,25 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;ba
           <div class="form-grid">
             <div class="form-group"><label>Filter (PSI)</label><input type="number" id="ht-psi" step="0.5" placeholder="Baseline" inputmode="decimal"></div>
             <div class="form-group"><label>Water Temp (°F)</label><input type="number" id="ht-temp" step="0.5" placeholder="100–104" inputmode="decimal"></div>
-            <div class="form-group full"><label>Cover Condition</label>
-              <select id="ht-cover"><option value="">Select</option><option>Good</option><option>Worn</option><option>Damaged</option></select>
-            </div>
+            <div class="form-group full"><label>Cover Condition</label><select id="ht-cover"><option value="">Select</option><option>Good</option><option>Worn</option><option>Damaged</option></select></div>
           </div>
         </div>
-        <div class="card">
-          <div class="card-title">Notes</div>
-          <div class="form-group"><textarea id="ht-notes" placeholder="Chemicals added, observations, actions taken..."></textarea></div>
-        </div>
+        <div class="card"><div class="card-title">Notes</div><div class="form-group"><textarea id="ht-notes" placeholder="Chemicals added, observations..."></textarea></div></div>
         <div class="btn-row">
           <button class="btn btn-ghost" onclick="clearForm('hottub')">Clear</button>
           <button class="btn btn-primary" onclick="saveEntry('hottub')">Save Entry</button>
         </div>
-        <div class="sync-bar"><div class="sync-dot" id="sync-dot-ht"></div><span id="sync-msg-ht">Ready</span></div>
+        <div class="sync-bar"><div class="sync-dot" id="sync-dot-ht"></div><span id="sync-msg-ht">Connected</span></div>
       </div>
     </div>
 
-    <!-- CHARTS PANEL -->
+    <!-- CHARTS -->
     <div id="panel-charts" class="panel">
       <div class="section-head">Pool — Trends</div>
       <div class="legend">
-        <div class="legend-item"><div class="legend-dot" style="background:#378ADD"></div>Free Chlorine</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#378ADD"></div>Free Cl</div>
         <div class="legend-item"><div class="legend-dot" style="background:#1D9E75"></div>pH</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#EF9F27"></div>Alk ÷ 10</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#EF9F27"></div>Alk÷10</div>
         <div class="legend-item"><div class="legend-dot" style="background:#D85A30"></div>F1 PSI</div>
         <div class="legend-item"><div class="legend-dot" style="background:#7F77DD"></div>F2 PSI</div>
       </div>
@@ -245,13 +373,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;ba
       <div class="legend">
         <div class="legend-item"><div class="legend-dot" style="background:#378ADD"></div>Sanitizer</div>
         <div class="legend-item"><div class="legend-dot" style="background:#1D9E75"></div>pH</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#EF9F27"></div>Alk ÷ 10</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#EF9F27"></div>Alk÷10</div>
         <div class="legend-item"><div class="legend-dot" style="background:#D85A30"></div>PSI</div>
       </div>
       <div class="chart-wrap"><canvas id="ht-chart" class="chart-canvas"></canvas></div>
     </div>
 
-    <!-- HISTORY PANEL -->
+    <!-- HISTORY -->
     <div id="panel-history" class="panel">
       <div class="tag-row">
         <div class="tag active" onclick="setHistoryFilter('all',this)">All</div>
@@ -261,7 +389,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;ba
       <div id="history-list"></div>
     </div>
 
-    <!-- REFERENCE PANEL -->
+    <!-- REFERENCE -->
     <div id="panel-ref" class="panel">
       <div class="section-head">Ideal Ranges</div>
       <div class="card" id="ref-table"></div>
@@ -270,7 +398,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;ba
     </div>
   </div>
 
-  <!-- Bottom Nav -->
   <nav class="nav">
     <button class="nav-btn active" onclick="switchPanel('entry',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -290,224 +417,5 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;ba
     </button>
   </nav>
 </div>
-
-<script>
-const today = new Date().toISOString().split('T')[0];
-const now = new Date().toTimeString().slice(0,5);
-['p-date','ht-date'].forEach(id=>document.getElementById(id).value=today);
-['p-time','ht-time'].forEach(id=>document.getElementById(id).value=now);
-
-let appData = {pool:[], hottub:[]};
-let historyFilter = 'all';
-let pChart = null, htChart = null;
-let currentEntryType = 'pool';
-
-// --- Storage ---
-async function loadData() {
-  try {
-    const r = await window.storage.get('impactathletic-data', true);
-    if (r && r.value) appData = JSON.parse(r.value);
-  } catch(e) { /* first load */ }
-  renderHistory();
-}
-
-async function saveData(syncDot, syncMsg) {
-  const dot = document.getElementById(syncDot);
-  const msg = document.getElementById(syncMsg);
-  dot.className = 'sync-dot syncing';
-  msg.textContent = 'Syncing...';
-  try {
-    await window.storage.set('impactathletic-data', JSON.stringify(appData), true);
-    dot.className = 'sync-dot';
-    msg.textContent = 'Synced ✓';
-  } catch(e) {
-    dot.className = 'sync-dot error';
-    msg.textContent = 'Sync failed';
-  }
-}
-
-// --- Navigation ---
-function switchPanel(name, el) {
-  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById('panel-'+name).classList.add('active');
-  el.classList.add('active');
-  if(name==='charts') renderCharts();
-  if(name==='history') renderHistory();
-  if(name==='ref') renderRef();
-}
-
-function setEntryType(type, el) {
-  currentEntryType = type;
-  document.querySelectorAll('.seg-btn').forEach(b=>b.classList.remove('active'));
-  el.classList.add('active');
-  document.getElementById('form-pool').style.display = type==='pool'?'block':'none';
-  document.getElementById('form-hottub').style.display = type==='hottub'?'block':'none';
-}
-
-// --- Form ---
-function v(id) { return document.getElementById(id).value || null; }
-function n(id) { const val = parseFloat(document.getElementById(id).value); return isNaN(val)?null:val; }
-
-function saveEntry(type) {
-  const isPool = type==='pool';
-  const dateId = isPool?'p-date':'ht-date';
-  if(!document.getElementById(dateId).value){alert('Please select a date.');return;}
-  const entry = { id: Date.now(), date: v(dateId), time: v(isPool?'p-time':'ht-time'), orp: v(isPool?'p-orp':'ht-orp'), tech: v(isPool?'p-tech':'ht-tech') };
-  if(isPool){
-    entry.fc=n('p-fc'); entry.cc=n('p-cc'); entry.ph=n('p-ph');
-    entry.ta=n('p-ta'); entry.ca=n('p-ca'); entry.cya=n('p-cya');
-    entry.psi1=n('p-psi1'); entry.psi2=n('p-psi2'); entry.temp=n('p-temp');
-    entry.clarity=v('p-clarity'); entry.notes=v('p-notes');
-  } else {
-    entry.sanType=v('ht-type'); entry.san=n('ht-san'); entry.cc=n('ht-cc');
-    entry.ph=n('ht-ph'); entry.ta=n('ht-ta'); entry.ca=n('ht-ca');
-    entry.psi=n('ht-psi'); entry.temp=n('ht-temp');
-    entry.foam=v('ht-foam'); entry.cover=v('ht-cover'); entry.notes=v('ht-notes');
-  }
-  appData[type].unshift(entry);
-  saveData(isPool?'sync-dot-p':'sync-dot-ht', isPool?'sync-msg-p':'sync-msg-ht');
-  clearForm(type);
-}
-
-function clearForm(type) {
-  const isPool = type==='pool';
-  const ids = isPool
-    ? ['p-fc','p-cc','p-ph','p-ta','p-ca','p-cya','p-psi1','p-psi2','p-temp','p-clarity','p-notes','p-orp']
-    : ['ht-type','ht-san','ht-cc','ht-ph','ht-ta','ht-ca','ht-psi','ht-temp','ht-foam','ht-cover','ht-notes','ht-orp'];
-  ids.forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  document.getElementById(isPool?'p-date':'ht-date').value=today;
-  document.getElementById(isPool?'p-time':'ht-time').value=now;
-}
-
-// --- Status ---
-function stat(v,min,max){if(v===null||v===undefined)return null;if(v<min)return'low';if(v>max)return'high';return'ok';}
-function badge(v,min,max,unit=''){
-  if(v===null||v===undefined)return'<span style="color:var(--text3)">—</span>';
-  const s=stat(v,min,max);
-  return `<span class="badge badge-${s}">${v}${unit}</span>`;
-}
-
-// --- History ---
-function setHistoryFilter(f,el){
-  historyFilter=f;
-  document.querySelectorAll('.tag-row .tag').forEach(t=>t.classList.remove('active'));
-  el.classList.add('active');
-  renderHistory();
-}
-
-function renderHistory(){
-  const el=document.getElementById('history-list');
-  let entries=[];
-  if(historyFilter!=='hottub') appData.pool.forEach(e=>entries.push({...e,_type:'pool'}));
-  if(historyFilter!=='pool') appData.hottub.forEach(e=>entries.push({...e,_type:'hottub'}));
-  entries.sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
-  if(!entries.length){el.innerHTML='<div class="empty">No entries yet.<br>Add your first reading in Entry.</div>';return;}
-  el.innerHTML=entries.slice(0,40).map(e=>{
-    const isPool=e._type==='pool';
-    const typeLabel=isPool?'🏊 Pool':'♨️ Hot Tub';
-    const chips=[];
-    if(isPool){
-      if(e.fc!=null) chips.push(`<div class="chip"><strong>Cl</strong> ${badge(e.fc,1,3)}</div>`);
-      if(e.ph!=null) chips.push(`<div class="chip"><strong>pH</strong> ${badge(e.ph,7.2,7.6)}</div>`);
-      if(e.ta!=null) chips.push(`<div class="chip"><strong>Alk</strong> ${e.ta}ppm</div>`);
-      if(e.psi1!=null) chips.push(`<div class="chip"><strong>F1</strong> ${e.psi1}psi</div>`);
-      if(e.psi2!=null) chips.push(`<div class="chip"><strong>F2</strong> ${e.psi2}psi</div>`);
-      if(e.temp!=null) chips.push(`<div class="chip"><strong>Temp</strong> ${e.temp}°F</div>`);
-      if(e.clarity) chips.push(`<div class="chip">${e.clarity}</div>`);
-    } else {
-      if(e.san!=null) chips.push(`<div class="chip"><strong>${e.sanType||'San'}</strong> ${badge(e.san,3,5)}</div>`);
-      if(e.ph!=null) chips.push(`<div class="chip"><strong>pH</strong> ${badge(e.ph,7.2,7.8)}</div>`);
-      if(e.ta!=null) chips.push(`<div class="chip"><strong>Alk</strong> ${e.ta}ppm</div>`);
-      if(e.psi!=null) chips.push(`<div class="chip"><strong>PSI</strong> ${e.psi}</div>`);
-      if(e.temp!=null) chips.push(`<div class="chip"><strong>Temp</strong> ${e.temp}°F</div>`);
-      if(e.foam) chips.push(`<div class="chip">Foam: ${e.foam}</div>`);
-    }
-    if(e.orp) chips.push(`<div class="chip"><strong>ORP</strong> ${e.orp}mV</div>`);
-    return `<div class="log-entry">
-      <div class="log-entry-header">
-        <div>
-          <div class="log-date">${e.date} <span style="color:var(--text2);font-weight:400;font-size:13px">${e.time||''}</span></div>
-          <div style="font-size:12px;color:var(--blue);margin-top:2px">${typeLabel}${e.tech?' · '+e.tech:''}</div>
-        </div>
-      </div>
-      <div class="log-chips">${chips.join('')}</div>
-      ${e.notes?`<div class="log-notes">${e.notes}</div>`:''}
-    </div>`;
-  }).join('');
-}
-
-// --- Charts ---
-function renderCharts(){
-  const pd=[...appData.pool].reverse();
-  const hd=[...appData.hottub].reverse();
-  if(pChart){pChart.destroy();}
-  if(htChart){htChart.destroy();}
-  const cfg=(labels,datasets)=>({
-    type:'line',
-    data:{labels,datasets},
-    options:{responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false}},
-      scales:{
-        x:{ticks:{color:'#5A6A8A',maxTicksLimit:7,font:{size:11}},grid:{color:'#1A2844'}},
-        y:{ticks:{color:'#5A6A8A',font:{size:11}},grid:{color:'#1A2844'},beginAtZero:false}
-      }
-    }
-  });
-  const ds=(label,data,color,dash=[])=>({label,data,borderColor:color,backgroundColor:color+'22',tension:0.3,pointRadius:3,fill:false,borderDash:dash,borderWidth:2});
-  pChart=new Chart(document.getElementById('pool-chart'),cfg(
-    pd.length?pd.map(e=>e.date):['—'],
-    [ds('Free Cl',pd.map(e=>e.fc),'#378ADD'),
-     ds('pH',pd.map(e=>e.ph),'#1D9E75',[5,3]),
-     ds('Alk÷10',pd.map(e=>e.ta!=null?+(e.ta/10).toFixed(1):null),'#EF9F27',[2,4]),
-     ds('F1 PSI',pd.map(e=>e.psi1),'#D85A30',[8,3]),
-     ds('F2 PSI',pd.map(e=>e.psi2),'#7F77DD',[4,2])]
-  ));
-  htChart=new Chart(document.getElementById('ht-chart'),cfg(
-    hd.length?hd.map(e=>e.date):['—'],
-    [ds('Sanitizer',hd.map(e=>e.san),'#378ADD'),
-     ds('pH',hd.map(e=>e.ph),'#1D9E75',[5,3]),
-     ds('Alk÷10',hd.map(e=>e.ta!=null?+(e.ta/10).toFixed(1):null),'#EF9F27',[2,4]),
-     ds('PSI',hd.map(e=>e.psi),'#D85A30',[8,3])]
-  ));
-}
-
-// --- Reference ---
-function renderRef(){
-  const rows=[
-    ['Free Chlorine','1.0–3.0 ppm','3.0–5.0 ppm'],
-    ['Bromine','N/A','3.0–5.0 ppm'],
-    ['Combined Cl','< 0.5 ppm','< 0.5 ppm'],
-    ['pH','7.2–7.6','7.2–7.8'],
-    ['Total Alkalinity','80–120 ppm','80–120 ppm'],
-    ['Calcium Hardness','200–400 ppm','150–250 ppm'],
-    ['Cyanuric Acid','30–50 ppm','N/A'],
-    ['ORP','650–750 mV','650–750 mV'],
-    ['Water Temp','78–82 °F','100–104 °F'],
-    ['Filter Pressure','Note baseline','Note baseline'],
-  ];
-  document.getElementById('ref-table').innerHTML=
-    `<div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="font-size:12px;font-weight:700;color:var(--text3)">PARAMETER</span><span style="font-size:12px;font-weight:700;color:var(--text3)">POOL / HOT TUB</span></div>`+
-    rows.map(([p,pool,ht])=>`<div class="ref-row">
-      <span class="ref-param">${p}</span>
-      <div class="ref-vals"><div>Pool: ${pool}</div><div>Tub: ${ht}</div></div>
-    </div>`).join('');
-  const tips=[
-    ['Chlorine dropping fast?','CYA may be below 30 ppm — chlorine burns off in sunlight. Add stabilizer and retest.'],
-    ['pH keeps rising?','High aeration off-gasses CO₂ and drives pH up. Reduce jets or add pH reducer in small doses.'],
-    ['Cloudy water?','Usually high pH, low chlorine, or high calcium. Test all three, shock, and run filter 24 hrs.'],
-    ['Filter +8 PSI over baseline?','Backwash (sand/DE) or clean/replace cartridge. A dirty filter stresses the pump.'],
-    ['Hot tub foaming?','Low calcium hardness, body oils, or soap residue. Shock, check calcium, encourage pre-soak shower.'],
-    ['Green pool?','Algae bloom. Brush walls, shock to 10× chlorine, run filter non-stop, retest in 24 hrs.'],
-    ['Low ORP reading?','ORP below 650 mV may indicate insufficient sanitizer or high organic load. Shock and retest.'],
-  ];
-  document.getElementById('ref-tips').innerHTML=tips.map(([t,b])=>`
-    <div class="tip-card"><div class="tip-title">${t}</div><div class="tip-body">${b}</div></div>`).join('');
-}
-
-// --- Init ---
-loadData();
-renderRef();
-</script>
 </body>
 </html>
