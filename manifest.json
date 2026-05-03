@@ -1,21 +1,17 @@
 {
-  "name": "Impact Athletic",
-  "short_name": "Impact",
-  "start_url": "/",
+  "background_color": "#0e0d5a",
+  "dir": "auto",
   "display": "standalone",
-  "background_color": "#0A1628",
-  "theme_color": "#0A1628",
+  "name": "Impact Athletic Pool Log",
   "orientation": "portrait",
-  "icons": [
-    {
-      "src": "https://via.placeholder.com/192x192/378ADD/ffffff?text=IA",
-      "sizes": "192x192",
-      "type": "image/png"
-    },
-    {
-      "src": "https://via.placeholder.com/512x512/378ADD/ffffff?text=IA",
-      "sizes": "512x512",
-      "type": "image/png"
-    }
+  "scope": "/",
+  "short_name": "Impact Athletic Pool Log",
+  "start_url": "/https://abrodin2028.github.io/impact-athletic/",
+  "theme_color": "#0A1628",
+  "lang": "en",
+  "id": "/https://abrodin2028.github.io/impact-athletic/",
+  "description": "Impact Athletic Pool Log",
+  "display_override": [
+    "window-controls-overlay"
   ]
 }
